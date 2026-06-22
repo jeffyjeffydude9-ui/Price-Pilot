@@ -63,6 +63,25 @@ function analyzeMarket({ price, cost, stats, comps }) {
 }
 
 /* ============================================================
+   MARKETPLACE FEES — true profit after Amazon/Walmart/eBay take
+   Referral rates approximate published 2024 marketplace schedules.
+   ============================================================ */
+const AMAZON_REFERRAL = { electronics: 0.08, beauty: 0.08, fashion: 0.17, home: 0.15, toys: 0.15, music: 0.15, media: 0.15, general: 0.15 };
+const WALMART_REFERRAL = { electronics: 0.08, beauty: 0.08, fashion: 0.15, home: 0.15, toys: 0.15, music: 0.15, media: 0.15, general: 0.12 };
+
+function computeFees(channel, price, cost, category, fbaFee) {
+  let referralRate = 0, perOrder = 0, fulfill = 0, label = 'Direct';
+  if (channel === 'amazon') { referralRate = AMAZON_REFERRAL[category] ?? 0.15; fulfill = fbaFee || 0; label = 'Amazon FBA'; }
+  else if (channel === 'walmart') { referralRate = WALMART_REFERRAL[category] ?? 0.12; label = 'Walmart'; }
+  else if (channel === 'ebay') { referralRate = 0.1325; perOrder = 0.40; label = 'eBay'; }
+  const referral = price * referralRate;
+  const totalFees = referral + perOrder + fulfill;
+  const net = price - cost - totalFees;
+  const netMargin = price > 0 ? (net / price) * 100 : 0;
+  return { channel, label, referralRate, referral, perOrder, fulfill, totalFees, net, netMargin };
+}
+
+/* ============================================================
    GAUGE (SVG semicircle, value 0..100)
    ============================================================ */
 function renderGauge(el, value, opts = {}) {
@@ -134,7 +153,39 @@ function setSourceBadge(source) {
   src.innerHTML = `<span class="pill__dot" style="background:${color}"></span> ${label}`;
 }
 
-const getPaid = () => localStorage.getItem('pp-paid') === '1';
+let ACCOUNT = { loggedIn: false, email: null, paid: false };
+const BOSS_EMAIL = 'jeffyjeffydude9@gmail.com';
+const BOSS_QUOTES = ["You're doing great 🚀", 'Crushing it, boss 💪', 'Empire mode: ON 👑', 'Big moves today 📈', 'The grind pays off 🔥', 'Built different, boss 🧠', 'Yo MC Blood Stain in the building 🎤'];
+const getPaid = () => (ACCOUNT && ACCOUNT.paid) || localStorage.getItem('pp-paid') === '1';
+
+/* Lightweight, dependency-free confetti pop. */
+function confettiPop() {
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const c = document.createElement('canvas');
+  c.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:2000';
+  document.body.appendChild(c);
+  const ctx = c.getContext('2d');
+  const W = c.width = innerWidth, H = c.height = innerHeight;
+  const colors = ['#1E40AF', '#3B82F6', '#D97706', '#15803D', '#F59E0B', '#DC2626', '#FFFFFF'];
+  const parts = [];
+  for (let i = 0; i < 180; i++) parts.push({
+    x: W / 2 + (Math.random() - .5) * 140, y: H * 0.4,
+    vx: (Math.random() - .5) * 13, vy: Math.random() * -15 - 4,
+    g: 0.32 + Math.random() * 0.2, s: 6 + Math.random() * 7,
+    rot: Math.random() * 6, vr: (Math.random() - .5) * 0.4, col: colors[i % colors.length],
+  });
+  let t = 0; const max = 150;
+  (function frame() {
+    t++; ctx.clearRect(0, 0, W, H);
+    parts.forEach(p => {
+      p.vy += p.g; p.x += p.vx; p.y += p.vy; p.rot += p.vr; p.vx *= 0.99;
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+      ctx.globalAlpha = Math.max(0, 1 - t / max); ctx.fillStyle = p.col;
+      ctx.fillRect(-p.s / 2, -p.s / 2, p.s, p.s * 0.6); ctx.restore();
+    });
+    if (t < max) requestAnimationFrame(frame); else c.remove();
+  })();
+}
 
 async function doSearch(query, opts = {}) {
   if (!query.trim()) return;
@@ -258,22 +309,44 @@ function renderResults() {
   $('reco').hidden = false;
   $('recoPrice').textContent = fmt(r.suggested);
 
+  // Marketplace fees → true profit after the channel's cut.
+  const channel = $('inChannel').value;
+  const fbaFee = parseFloat($('inFba').value) || 0;
+  const category = currentSearch.item.category;
+  $('fbaFeeField').hidden = channel !== 'amazon';
+  const f = computeFees(channel, price, cost, category, fbaFee);
+  const fSugg = computeFees(channel, r.suggested, cost, category, fbaFee);
+
   const deltaCls = r.deltaPct > 1 ? 'up' : r.deltaPct < -1 ? 'down' : 'flat';
   const deltaSign = r.deltaPct > 0 ? '+' : '';
-  const marginCls = r.margin >= 30 ? 'up' : r.margin >= 15 ? 'flat' : 'down';
+  // When a marketplace is selected, the third KPI shows NET margin after fees.
+  const showNet = channel !== 'direct';
+  const marginVal = showNet ? f.netMargin : r.margin;
+  const marginLabel = showNet ? `Net margin (${f.label})` : 'Your margin';
+  const marginCls = marginVal >= 25 ? 'up' : marginVal >= 10 ? 'flat' : 'down';
+  const marginNote = showNet
+    ? (cost > 0 ? `${fmt(f.net)}/unit after fees` : 'add cost for net profit')
+    : (r.margin >= 30 ? 'healthy' : r.margin >= 15 ? 'thin' : 'at risk');
   $('kpis').innerHTML = [
     kpi('Your price', fmt(price), `${deltaSign}${r.deltaPct.toFixed(1)}% vs median`, deltaCls),
     kpi('Market median', fmt(r.median), `range ${fmt(r.low)}–${fmt(r.high)}`, 'flat'),
-    kpi('Your margin', r.margin.toFixed(1) + '%', r.margin >= 30 ? 'healthy' : r.margin >= 15 ? 'thin' : 'at risk', marginCls),
+    kpi(marginLabel, marginVal.toFixed(1) + '%', marginNote, marginCls),
     kpi('Cheaper rivals', `${r.cheaper}/${currentSearch.comps.length}`, r.cheaper > currentSearch.comps.length / 2 ? 'undercut' : 'competitive', r.cheaper > currentSearch.comps.length / 2 ? 'down' : 'up'),
   ].join('');
 
   renderBars(r, price);
   renderListings(currentSearch.comps, price);
 
-  const mPct = Math.max(0, Math.min(100, r.suggestedMargin));
+  // Margin meter reflects the suggested price (net of fees when a channel is set).
+  const mPct = Math.max(0, Math.min(100, showNet ? fSugg.netMargin : r.suggestedMargin));
   $('marginFill').style.width = mPct + '%';
-  $('marginHint').textContent = cost > 0 ? `${r.suggestedMargin.toFixed(1)}% margin · ${fmt(r.suggested - cost)} profit per unit` : 'add your unit cost for exact margin';
+  if (cost <= 0) {
+    $('marginHint').textContent = 'add your unit cost for exact margin';
+  } else if (showNet) {
+    $('marginHint').textContent = `${fmt(fSugg.net)}/unit after ${f.label} fees (~${fmt(fSugg.totalFees)}/sale) · ${fSugg.netMargin.toFixed(1)}% net`;
+  } else {
+    $('marginHint').textContent = `${r.suggestedMargin.toFixed(1)}% margin · ${fmt(r.suggested - cost)} profit per unit`;
+  }
 }
 
 function kpi(label, value, delta, cls) {
@@ -336,7 +409,8 @@ function escapeAttr(s) { return escapeHtml(s); }
 
 /* Search events */
 $('searchForm').addEventListener('submit', (e) => { e.preventDefault(); doSearch($('searchInput').value); });
-['inPrice', 'inCost'].forEach(id => $(id).addEventListener('input', () => { if (currentSearch) renderResults(); }));
+['inPrice', 'inCost', 'inFba'].forEach(id => $(id).addEventListener('input', () => { if (currentSearch) renderResults(); }));
+$('inChannel').addEventListener('change', () => { if (currentSearch) renderResults(); });
 $('applyReco').addEventListener('click', () => {
   if (!currentSearch) return;
   const r = analyzeMarket({ price: parseFloat($('inPrice').value) || 0, cost: parseFloat($('inCost').value) || 0, stats: currentSearch.stats, comps: currentSearch.comps });
@@ -420,14 +494,118 @@ function handleCheckoutReturn() {
   if (c) history.replaceState({}, '', location.pathname + location.hash);
 }
 
-/* ---------- Paywall modal ---------- */
-function showPaywall() {
-  $('paywall').hidden = false;
+/* ---------- Accounts / login ---------- */
+let pendingAfterAuth = null;
+let authMode = 'login';
+
+async function loadAccount() {
+  try { ACCOUNT = await (await fetch('/api/me')).json(); } catch (e) { /* offline */ }
+  updateAccountUI();
 }
+function updateAccountUI() {
+  $('navLogin').hidden = !!ACCOUNT.loggedIn;
+  $('navAccount').hidden = !ACCOUNT.loggedIn;
+  if (ACCOUNT.loggedIn) $('accEmail').textContent = ACCOUNT.email + (ACCOUNT.paid ? ' · Pro' : '');
+}
+function openAuth(mode = 'login') { authMode = mode; updateAuthUI(); $('authModal').hidden = false; setTimeout(() => $('authEmail').focus(), 100); }
+function closeAuth() { $('authModal').hidden = true; $('authErr').hidden = true; }
+function updateAuthUI() {
+  const login = authMode === 'login';
+  $('authTitle').textContent = login ? 'Log in' : 'Create account';
+  $('authSubmit').textContent = login ? 'Log in' : 'Create account';
+  $('authToggleText').textContent = login ? 'New to PricePilot?' : 'Already have an account?';
+  $('authToggle').textContent = login ? 'Create an account' : 'Log in';
+  $('authPass').autocomplete = login ? 'current-password' : 'new-password';
+}
+$('navLogin').addEventListener('click', () => openAuth('login'));
+$('authToggle').addEventListener('click', (e) => { e.preventDefault(); authMode = authMode === 'login' ? 'signup' : 'login'; updateAuthUI(); $('authErr').hidden = true; });
+$('authModal').addEventListener('click', (e) => { if (e.target.hasAttribute('data-close')) closeAuth(); });
+$('authForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const email = $('authEmail').value.trim(), password = $('authPass').value;
+  const btn = $('authSubmit'), orig = btn.textContent; btn.disabled = true; btn.textContent = '…';
+  try {
+    const res = await (await fetch('/api/' + (authMode === 'login' ? 'login' : 'signup'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password })
+    })).json();
+    if (!res.ok) { $('authErr').textContent = res.error || 'Failed'; $('authErr').hidden = false; }
+    else {
+      ACCOUNT = { loggedIn: true, email: res.email, paid: !!res.paid };
+      updateAccountUI(); closeAuth();
+      if (res.email === BOSS_EMAIL) {
+        confettiPop(); setTimeout(confettiPop, 350);
+        toast('Welcome back, boss 👑', BOSS_QUOTES[Math.floor(Math.random() * BOSS_QUOTES.length)], 'success', 6000);
+      } else {
+        toast(authMode === 'login' ? 'Welcome back' : 'Account created', res.email, 'success');
+      }
+      if (pendingAfterAuth) { const f = pendingAfterAuth; pendingAfterAuth = null; f(); }
+    }
+  } catch (_) { $('authErr').textContent = 'Could not reach server'; $('authErr').hidden = false; }
+  finally { btn.disabled = false; btn.textContent = orig; }
+});
+$('navLogout').addEventListener('click', async () => {
+  try { await fetch('/api/logout', { method: 'POST' }); } catch (_) {}
+  ACCOUNT = { loggedIn: false, email: null, paid: false };
+  localStorage.removeItem('pp-paid'); updateAccountUI();
+  toast('Logged out', 'See you soon.', '');
+});
+
+/* ---------- Purchase modal (PayPal + Stripe) ---------- */
+let PAYPAL_CFG = null, paypalSdkLoaded = false;
+async function loadPayPalConfig() { try { PAYPAL_CFG = await (await fetch('/api/paypal/config')).json(); } catch (e) { PAYPAL_CFG = { configured: false }; } }
+
+function showPaywall() { $('paywall').hidden = false; setupPurchase(); }
 function hidePaywall() { $('paywall').hidden = true; }
+
+function setupPurchase() {
+  const note = $('pwNote'), container = $('paypalButtons');
+  if (PAYPAL_CFG && PAYPAL_CFG.configured) {
+    if (ACCOUNT.loggedIn) {
+      note.hidden = true;
+    } else {
+      note.hidden = false;
+      note.innerHTML = 'Tip: <a href="#" id="pwLoginLink">log in</a> first so your unlock saves to your account.';
+      const l = $('pwLoginLink');
+      if (l) l.onclick = (e) => { e.preventDefault(); pendingAfterAuth = () => { if (!$('paywall').hidden) setupPurchase(); }; openAuth('login'); };
+    }
+    renderPayPal();
+  } else {
+    note.hidden = true;
+    container.innerHTML = '<p class="modal__note">PayPal not configured on the server.</p>';
+  }
+}
+
+function renderPayPal() {
+  const container = $('paypalButtons'); container.innerHTML = '';
+  const go = () => {
+    if (!window.paypal) { container.innerHTML = '<p class="modal__note">PayPal failed to load.</p>'; return; }
+    window.paypal.Buttons({
+      style: { layout: 'horizontal', height: 42, color: 'gold', tagline: false },
+      createOrder: async () => {
+        const r = await (await fetch('/api/paypal/create-order', { method: 'POST' })).json();
+        if (!r.ok) throw new Error(r.error || 'create failed');
+        return r.id;
+      },
+      onApprove: async (data) => {
+        const r = await (await fetch('/api/paypal/capture', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orderId: data.orderID })
+        })).json();
+        if (r.ok) { ACCOUNT.paid = true; localStorage.setItem('pp-paid', '1'); updateAccountUI(); hidePaywall(); toast('Payment complete 🎉', 'Unlimited searches unlocked.', 'success', 6000); }
+        else toast('Payment issue', r.error || 'Could not confirm payment', 'error');
+      },
+      onError: () => toast('PayPal error', 'Try the card option below.', 'error'),
+    }).render('#paypalButtons');
+  };
+  if (paypalSdkLoaded) { go(); return; }
+  const s = document.createElement('script');
+  s.src = 'https://www.paypal.com/sdk/js?client-id=' + encodeURIComponent(PAYPAL_CFG.clientId) + '&currency=USD';
+  s.onload = () => { paypalSdkLoaded = true; go(); };
+  s.onerror = () => { container.innerHTML = '<p class="modal__note">Could not load PayPal.</p>'; };
+  document.body.appendChild(s);
+}
+
 $('paywall').addEventListener('click', (e) => { if (e.target.hasAttribute('data-close')) hidePaywall(); });
-$('pwSubscribe').addEventListener('click', () => buyPlan('growth', $('pwSubscribe')));
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('paywall').hidden) hidePaywall(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { if (!$('paywall').hidden) hidePaywall(); if (!$('authModal').hidden) closeAuth(); } });
 
 /* ---------- Toast ---------- */
 let toastTimer;
@@ -494,7 +672,8 @@ $('plans').innerHTML = PLANS.map(p => `
   </div>`).join('');
 $('plans').addEventListener('click', (e) => {
   const btn = e.target.closest('[data-plan]'); if (!btn) return;
-  buyPlan(btn.dataset.plan, btn);
+  if (btn.dataset.plan === 'starter') { $('demo').scrollIntoView({ behavior: 'smooth' }); setTimeout(() => $('searchInput').focus(), 500); }
+  else showPaywall();   // PayPal purchase
 });
 
 /* CTA / nav buttons that should buy or scroll */
@@ -513,43 +692,56 @@ document.querySelectorAll('.reveal, .step, .tile, .plan').forEach((el, i) => {
 /* ============================================================
    CONNECTED REPRICING — link eBay account, suggest & push prices
    ============================================================ */
-async function refreshEbayStatus() {
-  const status = $('storeStatus'), connectBtn = $('ebayConnectBtn'), refreshBtn = $('ebayRefreshBtn');
+const CHANNELS = {
+  ebay: { label: 'eBay', oauth: true, keys: 'EBAY_CLIENT_ID, EBAY_CLIENT_SECRET & EBAY_RUNAME' },
+  walmart: { label: 'Walmart', oauth: false, keys: 'WALMART_CLIENT_ID & WALMART_CLIENT_SECRET' },
+};
+let storeChannel = 'ebay';
+
+async function refreshStoreStatus() {
+  const ch = storeChannel, cfg = CHANNELS[ch];
+  const status = $('storeStatus'), connectBtn = $('storeConnectBtn'), refreshBtn = $('storeRefreshBtn');
+  $('storeListings').innerHTML = '';
   let s;
-  try { s = await (await fetch('/api/ebay/status')).json(); }
-  catch (e) { status.textContent = 'Backend offline — start the Python server to use repricing.'; return; }
+  try { s = await (await fetch(`/api/${ch}/status`)).json(); }
+  catch (e) { status.textContent = 'Backend offline — start the Python server to use repricing.'; connectBtn.hidden = true; refreshBtn.hidden = true; return; }
 
   if (!s.appConfigured) {
     status.className = 'store__status';
-    status.innerHTML = 'eBay app not configured. Set <code>EBAY_CLIENT_ID</code>, <code>EBAY_CLIENT_SECRET</code> &amp; <code>EBAY_RUNAME</code> on the server, then reload.';
+    status.innerHTML = `${cfg.label} not configured. Set <code>${cfg.keys}</code> on the server, then reload.`;
     connectBtn.hidden = true; refreshBtn.hidden = true;
     return;
   }
-  if (!s.connected) {
+  if (cfg.oauth && !s.connected) {
     status.className = 'store__status';
-    status.textContent = 'Your eBay account is not connected yet.';
-    connectBtn.hidden = false; refreshBtn.hidden = true;
-    $('storeListings').innerHTML = '';
+    status.textContent = `Your ${cfg.label} account is not connected yet.`;
+    connectBtn.hidden = false; connectBtn.textContent = `Connect ${cfg.label} account`; refreshBtn.hidden = true;
     return;
   }
   status.className = 'store__status is-on';
-  status.innerHTML = '<span class="pill__dot"></span> eBay account connected';
+  status.innerHTML = `<span class="pill__dot"></span> ${cfg.label} connected`;
   connectBtn.hidden = true; refreshBtn.hidden = false;
-  loadEbayListings();
+  loadStoreListings();
 }
 
-$('ebayConnectBtn').addEventListener('click', () => { window.location.href = '/api/ebay/connect'; });
-$('ebayRefreshBtn').addEventListener('click', refreshEbayListings);
-function refreshEbayListings() { loadEbayListings(); }
+$('storeTabs').addEventListener('click', (e) => {
+  const t = e.target.closest('.store__tab'); if (!t) return;
+  storeChannel = t.dataset.channel;
+  $('storeTabs').querySelectorAll('.store__tab').forEach(x => x.classList.toggle('is-active', x === t));
+  refreshStoreStatus();
+});
+$('storeConnectBtn').addEventListener('click', () => { if (CHANNELS[storeChannel].oauth) window.location.href = `/api/${storeChannel}/connect`; });
+$('storeRefreshBtn').addEventListener('click', loadStoreListings);
 
-async function loadEbayListings() {
+async function loadStoreListings() {
+  const ch = storeChannel, cfg = CHANNELS[ch];
   const wrap = $('storeListings');
   wrap.innerHTML = '<div class="store__empty">Loading your listings…</div>';
   let data;
-  try { data = await (await fetch('/api/ebay/listings')).json(); }
+  try { data = await (await fetch(`/api/${ch}/listings`)).json(); }
   catch (e) { wrap.innerHTML = '<div class="store__empty">Could not load listings.</div>'; return; }
   if (!data.ok) { wrap.innerHTML = `<div class="store__empty">${escapeHtml(data.error || 'Could not load listings')}</div>`; return; }
-  if (!data.listings.length) { wrap.innerHTML = '<div class="store__empty">No active listings found on this account.</div>'; return; }
+  if (!data.listings.length) { wrap.innerHTML = `<div class="store__empty">No active listings found on this ${cfg.label} account.</div>`; return; }
 
   wrap.innerHTML = data.listings.map((l, i) => `
     <div class="srow" data-id="${escapeAttr(l.itemId)}" data-price="${l.price}" id="srow-${i}">
@@ -558,7 +750,7 @@ async function loadEbayListings() {
       <div class="srow__sugg" data-sugg>—<span>suggested</span></div>
       <button type="button" class="btn btn--ghost btn--sm" data-act="analyze">Analyze</button>
     </div>`).join('')
-    + `<p class="store__note">PricePilot benchmarks each listing against the live market. Nothing is changed on eBay until you confirm each price.</p>`;
+    + `<p class="store__note">PricePilot benchmarks each listing against the live market. Nothing is changed on ${cfg.label} until you confirm each price.</p>`;
 
   wrap.querySelectorAll('.srow').forEach(row => {
     row.querySelector('[data-act="analyze"]').addEventListener('click', () => analyzeRow(row));
@@ -566,6 +758,7 @@ async function loadEbayListings() {
 }
 
 async function analyzeRow(row) {
+  const cfg = CHANNELS[storeChannel];
   const title = row.querySelector('.srow__title').textContent.trim();
   const current = parseFloat(row.dataset.price) || 0;
   const btn = row.querySelector('button');
@@ -585,7 +778,7 @@ async function analyzeRow(row) {
     suggEl.className = 'srow__sugg ' + dir;
     suggEl.innerHTML = `${fmt(r.suggested)}<span>median ${fmt(r.median)}</span>`;
     row._suggested = r.suggested;
-    btn.textContent = 'Apply to eBay'; btn.disabled = false;
+    btn.textContent = `Apply to ${cfg.label}`; btn.disabled = false;
     btn.className = 'btn btn--accent btn--sm';
     btn.onclick = () => applyRow(row);
   } catch (e) {
@@ -595,28 +788,29 @@ async function analyzeRow(row) {
 }
 
 async function applyRow(row) {
+  const ch = storeChannel, cfg = CHANNELS[ch];
   const itemId = row.dataset.id, price = row._suggested;
   if (!price) return;
-  if (!confirm(`Update this eBay listing's price to ${fmt(price)}?\n\nThis changes the live price on your eBay account.`)) return;
+  if (!confirm(`Update this ${cfg.label} listing's price to ${fmt(price)}?\n\nThis changes the live price on your ${cfg.label} account.`)) return;
   const btn = row.querySelector('button');
   btn.textContent = 'Updating…'; btn.disabled = true;
   try {
-    const res = await (await fetch('/api/ebay/reprice', {
+    const res = await (await fetch(`/api/${ch}/reprice`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ itemId, price, confirm: true })
     })).json();
     if (res.ok) {
-      toast('Price updated on eBay', res.message || `Set to ${fmt(price)}`, 'success');
+      toast(`Price updated on ${cfg.label}`, res.message || `Set to ${fmt(price)}`, 'success');
       row.querySelector('.srow__price').innerHTML = `${fmt(price)}<span>current</span>`;
       row.dataset.price = price;
       btn.textContent = 'Done ✓';
     } else {
-      toast('Update failed', res.error || res.message || 'eBay rejected the change', 'error');
-      btn.textContent = 'Apply to eBay'; btn.disabled = false;
+      toast('Update failed', res.error || res.message || `${cfg.label} rejected the change`, 'error');
+      btn.textContent = `Apply to ${cfg.label}`; btn.disabled = false;
     }
   } catch (e) {
     toast('Update failed', 'Could not reach the server.', 'error');
-    btn.textContent = 'Apply to eBay'; btn.disabled = false;
+    btn.textContent = `Apply to ${cfg.label}`; btn.disabled = false;
   }
 }
 
@@ -632,8 +826,10 @@ function handleEbayReturn() {
 /* ---------- Init ---------- */
 updateConnectUI();
 loadConfig();
+loadAccount();
+loadPayPalConfig();
 handleCheckoutReturn();
 handleEbayReturn();
-refreshEbayStatus();
+refreshStoreStatus();
 // Pre-run a search so the demo isn't empty on load (doesn't count against the free limit).
 doSearch('RTX 5090', { auto: true });

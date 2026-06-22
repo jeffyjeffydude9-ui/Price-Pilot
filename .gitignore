@@ -1,3 +1,4 @@
 # Secrets — never commit these
 server/secrets.json
 server/.ebay_user.json
+server/users.json

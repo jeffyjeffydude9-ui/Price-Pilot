@@ -8,13 +8,21 @@ services:
     healthCheckPath: /
     envVars:
       # Paste these values in the Render dashboard (Environment tab).
-      - key: SEARCH_API_KEY        # your SerpAPI key (Google Shopping, all categories)
+      - key: SEARCH_API_KEY        # SerpAPI key (Google Shopping, all categories)
         sync: false
-      - key: EBAY_CLIENT_ID        # eBay App ID  (from developer.ebay.com)
+      - key: PAYPAL_CLIENT_ID      # PayPal REST client id
+        sync: false
+      - key: PAYPAL_SECRET         # PayPal REST secret
+        sync: false
+      - key: PAYPAL_ENV            # "sandbox" or "live"
+        sync: false
+      - key: EBAY_CLIENT_ID        # eBay App ID
         sync: false
       - key: EBAY_CLIENT_SECRET    # eBay Cert ID
         sync: false
-      - key: EBAY_RUNAME           # eBay RuName  (redirect)
+      - key: EBAY_RUNAME           # eBay RuName (set after you have the Render URL)
         sync: false
-      - key: STRIPE_SECRET_KEY     # optional, for real checkout
+      - key: EBAY_ENV              # "sandbox" or "production"
+        sync: false
+      - key: STRIPE_SECRET_KEY     # optional
         sync: false

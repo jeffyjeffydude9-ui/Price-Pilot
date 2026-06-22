@@ -23,8 +23,10 @@ import re
 import json
 import html
 import time
+import uuid
 import base64
 import hashlib
+import secrets
 import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -43,7 +45,22 @@ EBAY_CLIENT_SECRET = os.environ.get("EBAY_CLIENT_SECRET", "").strip()
 # RuName (eBay redirect/"redirect_uri" value) from your eBay app — required to
 # connect a user account and write prices back.
 EBAY_RUNAME = os.environ.get("EBAY_RUNAME", "").strip()
+EBAY_ENV = os.environ.get("EBAY_ENV", "production").strip().lower()
 _ebay_token = {"value": "", "exp": 0}          # app token (read-only Browse search)
+
+
+def _ebay_api():
+    return "https://api.sandbox.ebay.com" if EBAY_ENV == "sandbox" else "https://api.ebay.com"
+
+
+def _ebay_auth():
+    return "https://auth.sandbox.ebay.com" if EBAY_ENV == "sandbox" else "https://auth.ebay.com"
+
+# Walmart Marketplace — client-credentials keys (no browser approval needed).
+# Get them at: Walmart Seller Center → Settings → API Key Management.
+WALMART_CLIENT_ID = os.environ.get("WALMART_CLIENT_ID", "").strip()
+WALMART_CLIENT_SECRET = os.environ.get("WALMART_CLIENT_SECRET", "").strip()
+_walmart_token = {"value": "", "exp": 0}
 
 # OAuth scopes needed to read a user's listings and revise prices.
 EBAY_USER_SCOPES = "https://api.ebay.com/oauth/api_scope/sell.inventory"
@@ -73,6 +90,8 @@ def _load_secrets():
     zero user input. Env vars still win if set. Kept server-side only — never
     sent to the browser."""
     global SEARCH_API_KEY, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_RUNAME, STRIPE_SECRET_KEY
+    global WALMART_CLIENT_ID, WALMART_CLIENT_SECRET, PAYPAL_CLIENT_ID, PAYPAL_SECRET
+    global EBAY_ENV, PAYPAL_ENV, PAYPAL_BASE
     try:
         with open(os.path.join(ROOT, "secrets.json")) as f:
             s = json.load(f)
@@ -82,10 +101,17 @@ def _load_secrets():
     EBAY_CLIENT_ID = EBAY_CLIENT_ID or (s.get("ebayClientId") or "").strip()
     EBAY_CLIENT_SECRET = EBAY_CLIENT_SECRET or (s.get("ebayClientSecret") or "").strip()
     EBAY_RUNAME = EBAY_RUNAME or (s.get("ebayRuName") or "").strip()
+    if s.get("ebayEnv"):
+        EBAY_ENV = s["ebayEnv"].strip().lower()
     STRIPE_SECRET_KEY = STRIPE_SECRET_KEY or (s.get("stripeSecretKey") or "").strip()
+    WALMART_CLIENT_ID = WALMART_CLIENT_ID or (s.get("walmartClientId") or "").strip()
+    WALMART_CLIENT_SECRET = WALMART_CLIENT_SECRET or (s.get("walmartClientSecret") or "").strip()
+    PAYPAL_CLIENT_ID = PAYPAL_CLIENT_ID or (s.get("paypalClientId") or "").strip()
+    PAYPAL_SECRET = PAYPAL_SECRET or (s.get("paypalSecret") or "").strip()
+    if s.get("paypalEnv"):
+        PAYPAL_ENV = s["paypalEnv"].strip().lower()
+        PAYPAL_BASE = "https://api-m.sandbox.paypal.com" if PAYPAL_ENV == "sandbox" else "https://api-m.paypal.com"
 
-
-_load_secrets()
 
 # Subscription plans (amounts in cents). price_data is created inline so you
 # don't need to pre-create Prices in the Stripe dashboard.
@@ -94,9 +120,44 @@ PLANS = {
     "scale":  {"name": "PricePilot Scale",  "amount": 9900, "interval": "month"},
 }
 
-# Freemium: this many free searches per visitor, then a paywall.
+# Freemium: this many free searches per visitor PER DAY, then a paywall.
 FREE_SEARCH_LIMIT = int(os.environ.get("FREE_SEARCH_LIMIT", "2"))
-SEARCH_COUNTS = {}   # ip -> count (resets when the server restarts)
+SEARCH_COUNTS = {}   # "ip|YYYY-MM-DD" -> count
+
+# PayPal (for the purchase menu). Client ID is public; secret stays server-side.
+PAYPAL_CLIENT_ID = os.environ.get("PAYPAL_CLIENT_ID", "").strip()
+PAYPAL_SECRET = os.environ.get("PAYPAL_SECRET", "").strip()
+PAYPAL_ENV = os.environ.get("PAYPAL_ENV", "live").strip().lower()   # "live" or "sandbox"
+PAYPAL_BASE = "https://api-m.sandbox.paypal.com" if PAYPAL_ENV == "sandbox" else "https://api-m.paypal.com"
+PLAN_PRICE = "29.00"
+
+# Accounts: simple file-backed users + in-memory sessions.
+USERS_FILE = os.path.join(ROOT, "users.json")
+_users = {}            # email -> {salt, hash, paid, created}
+_sessions = {}         # token -> email
+
+
+def _load_users():
+    global _users
+    try:
+        with open(USERS_FILE) as f:
+            _users = json.load(f)
+    except Exception:
+        _users = {}
+
+
+def _save_users():
+    try:
+        with open(USERS_FILE, "w") as f:
+            json.dump(_users, f)
+    except Exception as e:
+        print("[auth] could not save users:", e)
+
+
+def _hash_pw(pw, salt=None):
+    salt = salt or secrets.token_hex(16)
+    h = hashlib.pbkdf2_hmac("sha256", pw.encode(), bytes.fromhex(salt), 120000).hex()
+    return salt, h
 
 PLATFORMS = ["Amazon", "eBay", "Walmart", "Etsy", "Shopify", "Target", "Best Buy", "Mercari"]
 SEARCH_URLS = {
@@ -337,7 +398,7 @@ def _ebay_access_token():
         "scope": "https://api.ebay.com/oauth/api_scope",
     }).encode()
     req = urllib.request.Request(
-        "https://api.ebay.com/identity/v1/oauth2/token", data=body,
+        _ebay_api() + "/identity/v1/oauth2/token", data=body,
         headers={"Authorization": "Basic " + basic,
                  "Content-Type": "application/x-www-form-urlencoded"}, method="POST")
     with urllib.request.urlopen(req, timeout=15) as resp:
@@ -356,7 +417,7 @@ def search_ebay_api(item):
         "filter": "buyingOptions:{FIXED_PRICE}",
         "sort": "price",
     })
-    url = "https://api.ebay.com/buy/browse/v1/item_summary/search?" + params
+    url = _ebay_api() + "/buy/browse/v1/item_summary/search?" + params
     req = urllib.request.Request(url, headers={
         "Authorization": "Bearer " + token,
         "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
@@ -398,7 +459,7 @@ def ebay_consent_url():
         "redirect_uri": EBAY_RUNAME,
         "scope": EBAY_USER_SCOPES,
     })
-    return "https://auth.ebay.com/oauth2/authorize?" + params
+    return _ebay_auth() + "/oauth2/authorize?" + params
 
 
 def ebay_exchange_code(code):
@@ -408,7 +469,7 @@ def ebay_exchange_code(code):
         "grant_type": "authorization_code", "code": code, "redirect_uri": EBAY_RUNAME,
     }).encode()
     req = urllib.request.Request(
-        "https://api.ebay.com/identity/v1/oauth2/token", data=body,
+        _ebay_api() + "/identity/v1/oauth2/token", data=body,
         headers={"Authorization": "Basic " + basic,
                  "Content-Type": "application/x-www-form-urlencoded"}, method="POST")
     with urllib.request.urlopen(req, timeout=20) as resp:
@@ -433,7 +494,7 @@ def ebay_user_token():
         "grant_type": "refresh_token", "refresh_token": rt, "scope": EBAY_USER_SCOPES,
     }).encode()
     req = urllib.request.Request(
-        "https://api.ebay.com/identity/v1/oauth2/token", data=body,
+        _ebay_api() + "/identity/v1/oauth2/token", data=body,
         headers={"Authorization": "Basic " + basic,
                  "Content-Type": "application/x-www-form-urlencoded"}, method="POST")
     with urllib.request.urlopen(req, timeout=20) as resp:
@@ -447,7 +508,7 @@ def ebay_user_token():
 def _trading_call(call_name, xml_body):
     token = ebay_user_token()
     req = urllib.request.Request(
-        "https://api.ebay.com/ws/api.dll", data=xml_body.encode("utf-8"),
+        _ebay_api() + "/ws/api.dll", data=xml_body.encode("utf-8"),
         headers={
             "X-EBAY-API-SITEID": "0",
             "X-EBAY-API-COMPATIBILITY-LEVEL": "1191",
@@ -497,6 +558,90 @@ def ebay_revise_price(item_id, new_price):
         return True, f"Price updated to ${new_price:.2f}"
     err = re.search(r"<LongMessage>([^<]+)</LongMessage>", resp)
     return False, (err.group(1) if err else "eBay rejected the update")
+
+
+# ----------------------------------------------------------------------------
+# Walmart Marketplace — client-credentials (no browser approval). Read items,
+# push price changes.
+# ----------------------------------------------------------------------------
+WALMART_BASE = "https://marketplace.walmartapis.com"
+
+
+def _walmart_headers(token=None):
+    h = {
+        "WM_SVC.NAME": "Walmart Marketplace",
+        "WM_QOS.CORRELATION_ID": str(uuid.uuid4()),
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    if token:
+        h["Authorization"] = "Bearer " + token
+        h["WM_SEC.ACCESS_TOKEN"] = token
+    return h
+
+
+def walmart_token():
+    if _walmart_token["value"] and _walmart_token["exp"] > time.time() + 30:
+        return _walmart_token["value"]
+    if not (WALMART_CLIENT_ID and WALMART_CLIENT_SECRET):
+        raise ValueError("Walmart not configured")
+    basic = base64.b64encode(f"{WALMART_CLIENT_ID}:{WALMART_CLIENT_SECRET}".encode()).decode()
+    headers = _walmart_headers()
+    headers["Authorization"] = "Basic " + basic
+    headers["Content-Type"] = "application/x-www-form-urlencoded"
+    req = urllib.request.Request(WALMART_BASE + "/v3/token",
+                                 data=b"grant_type=client_credentials",
+                                 headers=headers, method="POST")
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        data = json.loads(resp.read().decode())
+    _walmart_token["value"] = data["access_token"]
+    _walmart_token["exp"] = time.time() + int(data.get("expires_in", 900))
+    return _walmart_token["value"]
+
+
+def walmart_items():
+    token = walmart_token()
+    req = urllib.request.Request(WALMART_BASE + "/v3/items?limit=50",
+                                 headers=_walmart_headers(token))
+    with urllib.request.urlopen(req, timeout=25) as resp:
+        data = json.loads(resp.read().decode())
+    items = []
+    for it in data.get("ItemResponse", []):
+        sku = it.get("sku")
+        if not sku:
+            continue
+        price = (it.get("price") or {}).get("amount")
+        items.append({
+            "itemId": sku,
+            "title": it.get("productName") or sku,
+            "price": round(float(price), 2) if price else 0.0,
+            "url": f"https://www.walmart.com/ip/{it.get('wpid', '')}",
+        })
+    return items
+
+
+def walmart_reprice(sku, new_price):
+    token = walmart_token()
+    body = json.dumps({
+        "sku": sku,
+        "pricing": [{
+            "currentPriceType": "BASE",
+            "currentPrice": {"currency": "USD", "amount": round(new_price, 2)},
+        }],
+    }).encode()
+    req = urllib.request.Request(WALMART_BASE + "/v3/price", data=body,
+                                 headers=_walmart_headers(token), method="PUT")
+    try:
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            data = json.loads(resp.read().decode())
+        # Walmart returns ItemPriceResponse with a success flag.
+        ipr = data.get("ItemPriceResponse") or data
+        if str(ipr).lower().find("success") >= 0 or ipr.get("message", "").lower().find("success") >= 0:
+            return True, f"Price updated to ${new_price:.2f}"
+        return True, f"Submitted ${new_price:.2f} to Walmart"
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "ignore")[:200]
+        return False, f"Walmart rejected the update: {detail}"
 
 
 ITUNES_PLATFORM = {
@@ -727,6 +872,47 @@ def run_search(query, serpapi_key=None):
 
 
 # ----------------------------------------------------------------------------
+# PayPal (Orders v2 REST API)
+# ----------------------------------------------------------------------------
+def paypal_token():
+    basic = base64.b64encode(f"{PAYPAL_CLIENT_ID}:{PAYPAL_SECRET}".encode()).decode()
+    req = urllib.request.Request(
+        PAYPAL_BASE + "/v1/oauth2/token", data=b"grant_type=client_credentials",
+        headers={"Authorization": "Basic " + basic,
+                 "Content-Type": "application/x-www-form-urlencoded"}, method="POST")
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return json.loads(resp.read().decode())["access_token"]
+
+
+def paypal_create_order():
+    token = paypal_token()
+    body = json.dumps({
+        "intent": "CAPTURE",
+        "purchase_units": [{
+            "amount": {"currency_code": "USD", "value": PLAN_PRICE},
+            "description": "PricePilot Growth subscription",
+        }],
+    }).encode()
+    req = urllib.request.Request(
+        PAYPAL_BASE + "/v2/checkout/orders", data=body,
+        headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+        method="POST")
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return json.loads(resp.read().decode())["id"]
+
+
+def paypal_capture(order_id):
+    token = paypal_token()
+    req = urllib.request.Request(
+        PAYPAL_BASE + f"/v2/checkout/orders/{order_id}/capture", data=b"{}",
+        headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+        method="POST")
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        data = json.loads(resp.read().decode())
+    return data.get("status") == "COMPLETED", data
+
+
+# ----------------------------------------------------------------------------
 # Stripe Checkout (REST API, no SDK)
 # ----------------------------------------------------------------------------
 def stripe_create_checkout(plan_key, host_base):
@@ -793,14 +979,29 @@ class Handler(BaseHTTPRequestHandler):
         print("[%s] %s" % (self.log_date_time_string(), fmt % args))
 
     # ---- helpers ----
-    def _send_json(self, obj, status=200):
+    def _send_json(self, obj, status=200, cookies=None):
         payload = json.dumps(obj).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Cache-Control", "no-store")
+        for c in (cookies or []):
+            self.send_header("Set-Cookie", c)
         self.end_headers()
         self.wfile.write(payload)
+
+    def _get_cookie(self, name):
+        raw = self.headers.get("Cookie", "")
+        for part in raw.split(";"):
+            k, _, v = part.strip().partition("=")
+            if k == name:
+                return v
+        return None
+
+    def _current_user(self):
+        tok = self._get_cookie("pp_session")
+        email = _sessions.get(tok) if tok else None
+        return (email, _users.get(email)) if email else (None, None)
 
     def _host_base(self):
         host = self.headers.get("Host", "localhost:%d" % PORT)
@@ -831,6 +1032,16 @@ class Handler(BaseHTTPRequestHandler):
                 "ebayAppConfigured": bool(EBAY_CLIENT_ID and EBAY_CLIENT_SECRET and EBAY_RUNAME),
                 "plans": PLANS,
             })
+
+        # ---- Accounts ----
+        if path == "/api/me":
+            email, user = self._current_user()
+            return self._send_json({"loggedIn": bool(user), "email": email,
+                                    "paid": bool(user and user.get("paid"))})
+
+        if path == "/api/paypal/config":
+            return self._send_json({"configured": bool(PAYPAL_CLIENT_ID and PAYPAL_SECRET),
+                                    "clientId": PAYPAL_CLIENT_ID, "env": PAYPAL_ENV, "price": PLAN_PRICE})
 
         # ---- eBay account integration ----
         if path == "/api/ebay/status":
@@ -872,6 +1083,21 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 return self._send_json({"ok": False, "error": f"Could not load listings: {e}"}, 502)
 
+        # ---- Walmart Marketplace ----
+        if path == "/api/walmart/status":
+            return self._send_json({
+                "appConfigured": bool(WALMART_CLIENT_ID and WALMART_CLIENT_SECRET),
+                "connected": bool(WALMART_CLIENT_ID and WALMART_CLIENT_SECRET),
+            })
+
+        if path == "/api/walmart/listings":
+            if not (WALMART_CLIENT_ID and WALMART_CLIENT_SECRET):
+                return self._send_json({"ok": False, "error": "Walmart not connected"}, 401)
+            try:
+                return self._send_json({"ok": True, "listings": walmart_items()})
+            except Exception as e:
+                return self._send_json({"ok": False, "error": f"Could not load items: {e}"}, 502)
+
         # Static files (default to index.html)
         rel = path.lstrip("/") or "index.html"
         if rel.endswith("/"):
@@ -904,19 +1130,21 @@ class Handler(BaseHTTPRequestHandler):
             if not query:
                 return self._send_json({"ok": False, "error": "Enter a product name, URL, or details."}, 400)
 
-            # Freemium gate — count real user searches per visitor IP.
-            paid = bool(body.get("paid"))
+            # Freemium gate — paid accounts are unlimited; else count per visitor IP.
+            _, user = self._current_user()
+            paid = bool(user and user.get("paid")) or bool(body.get("paid"))
             is_auto = bool(body.get("auto"))   # the on-load demo search doesn't count
             remaining = None
             if not paid and not is_auto:
                 ip = (self.headers.get("X-Forwarded-For", "").split(",")[0].strip()
                       or self.client_address[0])
-                used = SEARCH_COUNTS.get(ip, 0)
+                key = ip + "|" + time.strftime("%Y-%m-%d")   # resets each day
+                used = SEARCH_COUNTS.get(key, 0)
                 if used >= FREE_SEARCH_LIMIT:
                     return self._send_json({"ok": True, "mode": "paywall",
-                                            "used": used, "limit": FREE_SEARCH_LIMIT})
-                SEARCH_COUNTS[ip] = used + 1
-                remaining = FREE_SEARCH_LIMIT - SEARCH_COUNTS[ip]
+                                            "used": used, "limit": FREE_SEARCH_LIMIT, "perDay": True})
+                SEARCH_COUNTS[key] = used + 1
+                remaining = FREE_SEARCH_LIMIT - SEARCH_COUNTS[key]
 
             t0 = time.time()
             result = run_search(query, serpapi_key=(body.get("serpApiKey") or "").strip())
@@ -929,6 +1157,60 @@ class Handler(BaseHTTPRequestHandler):
             body = self._read_json()
             plan = (body.get("plan") or "growth").strip().lower()
             return self._send_json(stripe_create_checkout(plan, self._host_base()))
+
+        # ---- Accounts ----
+        if path in ("/api/signup", "/api/login"):
+            body = self._read_json()
+            email = (body.get("email") or "").strip().lower()
+            pw = body.get("password") or ""
+            if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email) or len(pw) < 6:
+                return self._send_json({"ok": False, "error": "Enter a valid email and a 6+ character password."}, 400)
+            if path == "/api/signup":
+                if email in _users:
+                    return self._send_json({"ok": False, "error": "An account with that email already exists."}, 409)
+                salt, h = _hash_pw(pw)
+                _users[email] = {"salt": salt, "hash": h, "paid": False, "created": time.time()}
+                _save_users()
+            else:
+                u = _users.get(email)
+                if not u or _hash_pw(pw, u["salt"])[1] != u["hash"]:
+                    return self._send_json({"ok": False, "error": "Wrong email or password."}, 401)
+            token = secrets.token_urlsafe(24)
+            _sessions[token] = email
+            cookie = f"pp_session={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000"
+            return self._send_json({"ok": True, "email": email, "paid": bool(_users[email].get("paid"))},
+                                   cookies=[cookie])
+
+        if path == "/api/logout":
+            tok = self._get_cookie("pp_session")
+            if tok:
+                _sessions.pop(tok, None)
+            return self._send_json({"ok": True}, cookies=["pp_session=; Path=/; Max-Age=0"])
+
+        # ---- PayPal ----
+        if path == "/api/paypal/create-order":
+            if not (PAYPAL_CLIENT_ID and PAYPAL_SECRET):
+                return self._send_json({"ok": False, "error": "PayPal not configured"}, 400)
+            try:
+                return self._send_json({"ok": True, "id": paypal_create_order()})
+            except Exception as e:
+                return self._send_json({"ok": False, "error": f"PayPal error: {e}"}, 502)
+
+        if path == "/api/paypal/capture":
+            body = self._read_json()
+            order_id = (body.get("orderId") or "").strip()
+            if not order_id:
+                return self._send_json({"ok": False, "error": "Missing order id"}, 400)
+            try:
+                ok, _ = paypal_capture(order_id)
+            except Exception as e:
+                return self._send_json({"ok": False, "error": f"PayPal capture failed: {e}"}, 502)
+            if ok:
+                email, user = self._current_user()
+                if user:                       # unlock the logged-in account
+                    user["paid"] = True
+                    _save_users()
+            return self._send_json({"ok": ok})
 
         if path == "/api/ebay/reprice":
             body = self._read_json()
@@ -952,11 +1234,33 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 return self._send_json({"ok": False, "error": f"Reprice failed: {e}"}, 502)
 
+        if path == "/api/walmart/reprice":
+            body = self._read_json()
+            sku = str(body.get("itemId") or "").strip()
+            try:
+                new_price = round(float(body.get("price")), 2)
+            except (TypeError, ValueError):
+                return self._send_json({"ok": False, "error": "Invalid price"}, 400)
+            if not sku or new_price <= 0:
+                return self._send_json({"ok": False, "error": "Missing item or price"}, 400)
+            if not (WALMART_CLIENT_ID and WALMART_CLIENT_SECRET):
+                return self._send_json({"ok": False, "error": "Walmart not connected"}, 401)
+            if not body.get("confirm"):
+                return self._send_json({"ok": True, "preview": True, "itemId": sku, "price": new_price,
+                                        "message": f"Will set SKU {sku} to ${new_price:.2f}. Send confirm:true to apply."})
+            try:
+                ok, msg = walmart_reprice(sku, new_price)
+                return self._send_json({"ok": ok, "itemId": sku, "price": new_price, "message": msg})
+            except Exception as e:
+                return self._send_json({"ok": False, "error": f"Reprice failed: {e}"}, 502)
+
         return self._send_json({"error": "not found"}, 404)
 
 
 def main():
+    _load_secrets()
     _load_ebay_user()
+    _load_users()
     os.chdir(WEBSITE_DIR)
     httpd = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     print(f"PricePilot running on http://localhost:{PORT}")

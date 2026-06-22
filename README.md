@@ -129,5 +129,7 @@ pricepilot/
 | `EBAY_CLIENT_ID` | eBay App ID → live prices **+ account connect** | _(none)_ |
 | `EBAY_CLIENT_SECRET` | eBay Cert ID | _(none)_ |
 | `EBAY_RUNAME` | eBay RuName → enables connecting a seller account & repricing | _(none)_ |
+| `WALMART_CLIENT_ID` | Walmart Marketplace API key → read items & reprice | _(none)_ |
+| `WALMART_CLIENT_SECRET` | Walmart Marketplace API secret | _(none)_ |
 | `SEARCH_PROVIDER` | `auto`, `ebay`, `serpapi`, or `mock` | `auto` |
 | `SEARCH_API_KEY` | key for SerpAPI (if used) | _(none)_ |
