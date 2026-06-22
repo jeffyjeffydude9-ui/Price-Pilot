@@ -35,6 +35,14 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 WEBSITE_DIR = os.path.normpath(os.path.join(ROOT, "..", "website"))
 PORT = int(os.environ.get("PORT", "8123"))
 
+# Persistent data location. On Render, attach a disk and set DATA_DIR to its
+# mount path (e.g. /var/data) so accounts survive restarts/redeploys.
+DATA_DIR = (os.environ.get("DATA_DIR", "").strip() or ROOT)
+try:
+    os.makedirs(DATA_DIR, exist_ok=True)
+except Exception:
+    DATA_DIR = ROOT
+
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "").strip()
 SEARCH_PROVIDER = os.environ.get("SEARCH_PROVIDER", "auto").strip().lower()
 SEARCH_API_KEY = os.environ.get("SEARCH_API_KEY", "").strip()
@@ -64,7 +72,7 @@ _walmart_token = {"value": "", "exp": 0}
 
 # OAuth scopes needed to read a user's listings and revise prices.
 EBAY_USER_SCOPES = "https://api.ebay.com/oauth/api_scope/sell.inventory"
-EBAY_USER_TOKEN_FILE = os.path.join(ROOT, ".ebay_user.json")
+EBAY_USER_TOKEN_FILE = os.path.join(DATA_DIR, ".ebay_user.json")
 _ebay_user = {}   # {access_token, refresh_token, exp}
 
 
@@ -133,7 +141,7 @@ PLAN_PRICE = "29.00"
 
 # Accounts: simple file-backed users + in-memory sessions.
 BOSS_EMAIL = "jeffyjeffydude9@gmail.com"   # always unlimited, on any server
-USERS_FILE = os.path.join(ROOT, "users.json")
+USERS_FILE = os.path.join(DATA_DIR, "users.json")
 _users = {}            # email -> {salt, hash, paid, created}
 _sessions = {}         # token -> email
 
