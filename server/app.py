@@ -132,6 +132,7 @@ PAYPAL_BASE = "https://api-m.sandbox.paypal.com" if PAYPAL_ENV == "sandbox" else
 PLAN_PRICE = "29.00"
 
 # Accounts: simple file-backed users + in-memory sessions.
+BOSS_EMAIL = "jeffyjeffydude9@gmail.com"   # always unlimited, on any server
 USERS_FILE = os.path.join(ROOT, "users.json")
 _users = {}            # email -> {salt, hash, paid, created}
 _sessions = {}         # token -> email
@@ -411,11 +412,11 @@ def _ebay_access_token():
 def search_ebay_api(item):
     """REAL, accurate prices via eBay's official Browse API (free dev keys)."""
     token = _ebay_access_token()
+    # Best-match (not cheapest-first) so the set is representative, then we filter.
     params = urllib.parse.urlencode({
         "q": item["keywords"],
-        "limit": "30",
+        "limit": "50",
         "filter": "buyingOptions:{FIXED_PRICE}",
-        "sort": "price",
     })
     url = _ebay_api() + "/buy/browse/v1/item_summary/search?" + params
     req = urllib.request.Request(url, headers={
@@ -439,9 +440,15 @@ def search_ebay_api(item):
             "condition": it.get("condition", item["condition"])[:24],
             "url": it.get("itemWebUrl", "#"),
         })
-        if len(comps) >= 15:
-            break
+
+    # Drop junk/accessory outliers (e.g. $0.99 single cards under a sealed box):
+    # keep prices within 1/4 .. 4x of the median.
+    if len(comps) >= 5:
+        ps = sorted(c["price"] for c in comps)
+        med = ps[len(ps) // 2]
+        comps = [c for c in comps if med / 4 <= c["price"] <= med * 4] or comps
     comps.sort(key=lambda c: c["price"])
+    comps = comps[:15]
     if len(comps) < 3:
         raise ValueError(f"eBay API returned too few results ({len(comps)})")
     return comps, "ebay"
@@ -1037,7 +1044,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/me":
             email, user = self._current_user()
             return self._send_json({"loggedIn": bool(user), "email": email,
-                                    "paid": bool(user and user.get("paid"))})
+                                    "paid": bool(user and user.get("paid")) or (email == BOSS_EMAIL)})
 
         if path == "/api/paypal/config":
             return self._send_json({"configured": bool(PAYPAL_CLIENT_ID and PAYPAL_SECRET),
@@ -1131,8 +1138,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json({"ok": False, "error": "Enter a product name, URL, or details."}, 400)
 
             # Freemium gate — paid accounts are unlimited; else count per visitor IP.
-            _, user = self._current_user()
-            paid = bool(user and user.get("paid")) or bool(body.get("paid"))
+            email_, user = self._current_user()
+            paid = bool(user and user.get("paid")) or (email_ == BOSS_EMAIL) or bool(body.get("paid"))
             is_auto = bool(body.get("auto"))   # the on-load demo search doesn't count
             remaining = None
             if not paid and not is_auto:
@@ -1175,10 +1182,14 @@ class Handler(BaseHTTPRequestHandler):
                 u = _users.get(email)
                 if not u or _hash_pw(pw, u["salt"])[1] != u["hash"]:
                     return self._send_json({"ok": False, "error": "Wrong email or password."}, 401)
+            if email == BOSS_EMAIL and not _users[email].get("paid"):
+                _users[email]["paid"] = True
+                _save_users()
             token = secrets.token_urlsafe(24)
             _sessions[token] = email
             cookie = f"pp_session={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000"
-            return self._send_json({"ok": True, "email": email, "paid": bool(_users[email].get("paid"))},
+            return self._send_json({"ok": True, "email": email,
+                                    "paid": bool(_users[email].get("paid")) or (email == BOSS_EMAIL)},
                                    cookies=[cookie])
 
         if path == "/api/logout":

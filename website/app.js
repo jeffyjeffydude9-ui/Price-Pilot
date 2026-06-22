@@ -658,9 +658,9 @@ function miniSpark() {
 
 /* ---------- Pricing plans (wired to checkout) ---------- */
 const PLANS = [
-  { key: 'starter', name: 'Starter', price: '$0', per: '/mo', desc: 'For solo sellers testing the waters.', feats: ['25 product analyses / mo', 'Browser extension', 'Cross-platform comparison', 'Email support'], cta: 'Start free', cls: '' },
-  { key: 'growth', name: 'Growth', price: '$29', per: '/mo', desc: 'For active stores protecting margins.', feats: ['Unlimited analyses', 'Repricing alerts', 'Inventory health board', 'Store sync (Shopify, Amazon)', 'Priority support'], cta: 'Start 14-day trial', cls: 'plan--popular' },
-  { key: 'scale', name: 'Scale', price: '$99', per: '/mo', desc: 'For multi-channel brands & teams.', feats: ['Everything in Growth', 'API access', 'Bulk catalog scoring', 'Team seats & roles', 'Dedicated manager'], cta: 'Subscribe to Scale', cls: '' },
+  { key: 'starter', name: 'Starter', price: '$0', per: '', desc: 'For solo sellers testing the waters.', feats: ['2 free searches per day', 'Browser extension', 'Cross-platform comparison', 'Email support'], cta: 'Start free', cls: '' },
+  { key: 'growth', name: 'Growth', price: '$29', per: '/mo', desc: 'For active stores protecting margins.', feats: ['Unlimited searches', 'eBay repricing', 'FBA & fee profit calculator', 'Competitor alerts', 'Priority support'], cta: 'Get Growth', cls: 'plan--popular' },
+  { key: 'scale', name: 'Scale', price: '$99', per: '/mo', desc: 'For multi-channel brands & teams.', feats: ['Everything in Growth', 'API access', 'Bulk catalog scoring', 'Team seats & roles', 'Dedicated manager'], cta: 'Get Scale', cls: '' },
 ];
 $('plans').innerHTML = PLANS.map(p => `
   <div class="plan ${p.cls} reveal">
