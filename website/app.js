@@ -636,7 +636,7 @@ const FEATURES = [
   { cls: 'tile--mid', icon: ic('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/>'), title: 'Margin-aware suggestions', body: 'Every recommended price keeps you above your break-even and target margin — never a race to the bottom.' },
   { cls: 'tile--third', icon: ic('<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>'), title: 'Repricing alerts', body: 'Get pinged when a competitor undercuts you.' },
   { cls: 'tile--third', icon: ic('<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z"/>'), title: 'Inventory health', body: 'Flag overpriced SKUs that are clogging your stock.' },
-  { cls: 'tile--third', icon: ic('<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m2 7 10 6 10-6"/>'), title: 'Browser extension', body: 'Analyze any product page without leaving the tab.' },
+  { cls: 'tile--third', icon: ic('<path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/>'), title: 'Profit after fees', body: 'See true take-home after eBay & Amazon FBA fees.' },
 ];
 $('bento').innerHTML = FEATURES.map(f => `
   <div class="tile ${f.cls} reveal">
@@ -658,7 +658,7 @@ function miniSpark() {
 
 /* ---------- Pricing plans (wired to checkout) ---------- */
 const PLANS = [
-  { key: 'starter', name: 'Starter', price: '$0', per: '', desc: 'For solo sellers testing the waters.', feats: ['2 free searches per day', 'Browser extension', 'Cross-platform comparison', 'Email support'], cta: 'Start free', cls: '' },
+  { key: 'starter', name: 'Starter', price: '$0', per: '', desc: 'For solo sellers testing the waters.', feats: ['2 free searches per day', 'Cross-platform price comparison', 'Profit-after-fees calculator', 'Email support'], cta: 'Start free', cls: '' },
   { key: 'growth', name: 'Growth', price: '$29', per: '/mo', desc: 'For active stores protecting margins.', feats: ['Unlimited searches', 'eBay repricing', 'FBA & fee profit calculator', 'Competitor alerts', 'Priority support'], cta: 'Get Growth', cls: 'plan--popular' },
   { key: 'scale', name: 'Scale', price: '$99', per: '/mo', desc: 'For multi-channel brands & teams.', feats: ['Everything in Growth', 'API access', 'Bulk catalog scoring', 'Team seats & roles', 'Dedicated manager'], cta: 'Get Scale', cls: '' },
 ];
