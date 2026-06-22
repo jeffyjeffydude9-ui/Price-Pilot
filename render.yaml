@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: pricepilot
+    runtime: python
+    plan: free
+    buildCommand: "echo no build needed"
+    startCommand: "python server/app.py"
+    healthCheckPath: /
+    envVars:
+      # Paste these values in the Render dashboard (Environment tab).
+      - key: SEARCH_API_KEY        # your SerpAPI key (Google Shopping, all categories)
+        sync: false
+      - key: EBAY_CLIENT_ID        # eBay App ID  (from developer.ebay.com)
+        sync: false
+      - key: EBAY_CLIENT_SECRET    # eBay Cert ID
+        sync: false
+      - key: EBAY_RUNAME           # eBay RuName  (redirect)
+        sync: false
+      - key: STRIPE_SECRET_KEY     # optional, for real checkout
+        sync: false

@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@500;600;700&family=Fira+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="popup.css" />
+  <title>PricePilot</title>
+</head>
+<body>
+  <header class="pp-head">
+    <span class="pp-brand">
+      <svg viewBox="0 0 32 32" width="22" height="22"><rect width="32" height="32" rx="8" fill="#1E40AF"/><path d="M8 22V10m0 12 5-7 5 4 6-9" stroke="#D97706" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <strong>PricePilot</strong>
+    </span>
+    <span class="pp-host" id="ppHost">—</span>
+  </header>
+
+  <!-- States -->
+  <div id="ppLoading" class="pp-state">
+    <div class="pp-spinner"></div>
+    <p>Scanning this page for a price…</p>
+  </div>
+
+  <div id="ppEmpty" class="pp-state" hidden>
+    <div class="pp-state__icon">
+      <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+    </div>
+    <p>No price detected on this page.</p>
+    <span class="pp-muted">Open a product page, or enter a price below.</span>
+  </div>
+
+  <!-- Result -->
+  <main id="ppResult" class="pp-result" hidden>
+    <div class="pp-product">
+      <div class="pp-product__name" id="ppName">Product</div>
+      <div class="pp-product__meta"><span id="ppCat">electronics</span> · benchmarked across 8 platforms</div>
+    </div>
+
+    <div class="pp-verdict" id="ppVerdict">
+      <span class="pp-badge" id="ppBadge">—</span>
+      <div class="pp-gauge" id="ppGauge"></div>
+    </div>
+
+    <p class="pp-detail" id="ppDetail"></p>
+
+    <div class="pp-stats">
+      <div class="pp-stat"><span>Detected price</span><b id="ppPrice">—</b></div>
+      <div class="pp-stat"><span>Market median</span><b id="ppMedian">—</b></div>
+    </div>
+
+    <div class="pp-reco" id="ppReco">
+      <div>
+        <span class="pp-reco__label">Suggested price</span>
+        <span class="pp-reco__price" id="ppSuggest">—</span>
+      </div>
+      <span class="pp-reco__margin" id="ppMargin">—</span>
+    </div>
+
+    <!-- Cost input for accurate margin -->
+    <label class="pp-cost">
+      <span>Your unit cost (optional, for margin)</span>
+      <div class="pp-cost__in">
+        <span>$</span><input type="number" id="ppCost" placeholder="0.00" step="0.01" min="0" inputmode="decimal" />
+      </div>
+    </label>
+
+    <button class="pp-btn pp-btn--primary" id="ppSave">Save to workspace</button>
+    <button class="pp-btn pp-btn--ghost" id="ppOpen">Open full analysis →</button>
+  </main>
+
+  <footer class="pp-foot">
+    <span id="ppFootMsg">Analyzed locally · nothing leaves your browser</span>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>
