@@ -153,7 +153,7 @@ function setSourceBadge(source) {
   src.innerHTML = `<span class="pill__dot" style="background:${color}"></span> ${label}`;
 }
 
-let ACCOUNT = { loggedIn: false, email: null, paid: false };
+let ACCOUNT = { loggedIn: false, email: null, paid: false, subId: '' };
 const BOSS_EMAIL = 'jeffyjeffydude9@gmail.com';
 const BOSS_QUOTES = ["You're doing great 🚀", 'Crushing it, boss 💪', 'Empire mode: ON 👑', 'Big moves today 📈', 'The grind pays off 🔥', 'Built different, boss 🧠', 'Yo MC Blood Stain in the building 🎤'];
 const getPaid = () => (ACCOUNT && ACCOUNT.paid) || localStorage.getItem('pp-paid') === '1';
@@ -505,8 +505,17 @@ async function loadAccount() {
 function updateAccountUI() {
   $('navLogin').hidden = !!ACCOUNT.loggedIn;
   $('navAccount').hidden = !ACCOUNT.loggedIn;
+  $('navCancel').hidden = !(ACCOUNT.loggedIn && ACCOUNT.subId);
   if (ACCOUNT.loggedIn) $('accEmail').textContent = ACCOUNT.email + (ACCOUNT.paid ? ' · Pro' : '');
 }
+$('navCancel').addEventListener('click', async () => {
+  if (!confirm('Cancel your PricePilot subscription? Your unlimited access stops at the end of the billing period.')) return;
+  try {
+    const r = await (await fetch('/api/paypal/cancel', { method: 'POST' })).json();
+    if (r.ok) { ACCOUNT.paid = false; ACCOUNT.subId = ''; localStorage.removeItem('pp-paid'); updateAccountUI(); toast('Subscription cancelled', 'No more charges. You can resubscribe anytime.', ''); }
+    else toast('Could not cancel', r.error || 'Try again', 'error');
+  } catch (e) { toast('Could not cancel', 'Server error', 'error'); }
+});
 function openAuth(mode = 'login') { authMode = mode; updateAuthUI(); $('authModal').hidden = false; setTimeout(() => $('authEmail').focus(), 100); }
 function closeAuth() { $('authModal').hidden = true; $('authErr').hidden = true; }
 function updateAuthUI() {
@@ -577,28 +586,43 @@ function setupPurchase() {
 
 function renderPayPal() {
   const container = $('paypalButtons'); container.innerHTML = '';
+  const recurring = !!(PAYPAL_CFG.recurring && PAYPAL_CFG.planId);
   const go = () => {
     if (!window.paypal) { container.innerHTML = '<p class="modal__note">PayPal failed to load.</p>'; return; }
-    window.paypal.Buttons({
+    const cfg = {
       style: { layout: 'horizontal', height: 42, color: 'gold', tagline: false },
-      createOrder: async () => {
+      onError: () => toast('PayPal error', 'Please try again.', 'error'),
+    };
+    if (recurring) {
+      // Real monthly subscription ($29/mo, auto-renews until cancelled)
+      cfg.createSubscription = (data, actions) => actions.subscription.create({ plan_id: PAYPAL_CFG.planId });
+      cfg.onApprove = async (data) => {
+        const r = await (await fetch('/api/paypal/subscribe', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ subscriptionID: data.subscriptionID })
+        })).json();
+        if (r.ok) { ACCOUNT.paid = true; localStorage.setItem('pp-paid', '1'); window.location.href = '/success'; }
+        else toast('Subscription issue', r.error || 'Could not confirm', 'error');
+      };
+    } else {
+      cfg.createOrder = async () => {
         const r = await (await fetch('/api/paypal/create-order', { method: 'POST' })).json();
         if (!r.ok) throw new Error(r.error || 'create failed');
         return r.id;
-      },
-      onApprove: async (data) => {
+      };
+      cfg.onApprove = async (data) => {
         const r = await (await fetch('/api/paypal/capture', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orderId: data.orderID })
         })).json();
-        if (r.ok) { ACCOUNT.paid = true; localStorage.setItem('pp-paid', '1'); updateAccountUI(); hidePaywall(); toast('Payment complete 🎉', 'Unlimited searches unlocked.', 'success', 6000); }
+        if (r.ok) { ACCOUNT.paid = true; localStorage.setItem('pp-paid', '1'); window.location.href = '/success'; }
         else toast('Payment issue', r.error || 'Could not confirm payment', 'error');
-      },
-      onError: () => toast('PayPal error', 'Try the card option below.', 'error'),
-    }).render('#paypalButtons');
+      };
+    }
+    window.paypal.Buttons(cfg).render('#paypalButtons');
   };
   if (paypalSdkLoaded) { go(); return; }
+  const params = recurring ? '&vault=true&intent=subscription' : '&currency=USD';
   const s = document.createElement('script');
-  s.src = 'https://www.paypal.com/sdk/js?client-id=' + encodeURIComponent(PAYPAL_CFG.clientId) + '&currency=USD';
+  s.src = 'https://www.paypal.com/sdk/js?client-id=' + encodeURIComponent(PAYPAL_CFG.clientId) + params;
   s.onload = () => { paypalSdkLoaded = true; go(); };
   s.onerror = () => { container.innerHTML = '<p class="modal__note">Could not load PayPal.</p>'; };
   document.body.appendChild(s);

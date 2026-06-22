@@ -99,7 +99,7 @@ def _load_secrets():
     sent to the browser."""
     global SEARCH_API_KEY, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_RUNAME, STRIPE_SECRET_KEY
     global WALMART_CLIENT_ID, WALMART_CLIENT_SECRET, PAYPAL_CLIENT_ID, PAYPAL_SECRET
-    global EBAY_ENV, PAYPAL_ENV, PAYPAL_BASE
+    global EBAY_ENV, PAYPAL_ENV, PAYPAL_BASE, PAYPAL_PLAN_ID
     try:
         with open(os.path.join(ROOT, "secrets.json")) as f:
             s = json.load(f)
@@ -116,6 +116,7 @@ def _load_secrets():
     WALMART_CLIENT_SECRET = WALMART_CLIENT_SECRET or (s.get("walmartClientSecret") or "").strip()
     PAYPAL_CLIENT_ID = PAYPAL_CLIENT_ID or (s.get("paypalClientId") or "").strip()
     PAYPAL_SECRET = PAYPAL_SECRET or (s.get("paypalSecret") or "").strip()
+    PAYPAL_PLAN_ID = PAYPAL_PLAN_ID or (s.get("paypalPlanId") or "").strip()
     if s.get("paypalEnv"):
         PAYPAL_ENV = s["paypalEnv"].strip().lower()
         PAYPAL_BASE = "https://api-m.sandbox.paypal.com" if PAYPAL_ENV == "sandbox" else "https://api-m.paypal.com"
@@ -137,6 +138,7 @@ PAYPAL_CLIENT_ID = os.environ.get("PAYPAL_CLIENT_ID", "").strip()
 PAYPAL_SECRET = os.environ.get("PAYPAL_SECRET", "").strip()
 PAYPAL_ENV = os.environ.get("PAYPAL_ENV", "live").strip().lower()   # "live" or "sandbox"
 PAYPAL_BASE = "https://api-m.sandbox.paypal.com" if PAYPAL_ENV == "sandbox" else "https://api-m.paypal.com"
+PAYPAL_PLAN_ID = os.environ.get("PAYPAL_PLAN_ID", "").strip()       # P-xxxx → enables monthly recurring
 PLAN_PRICE = "29.00"
 
 # Accounts: simple file-backed users + in-memory sessions.
@@ -927,6 +929,28 @@ def paypal_capture(order_id):
     return data.get("status") == "COMPLETED", data
 
 
+def paypal_get_subscription(sub_id):
+    """Verify a subscription is real & active."""
+    token = paypal_token()
+    req = urllib.request.Request(
+        PAYPAL_BASE + f"/v1/billing/subscriptions/{sub_id}",
+        headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return json.loads(resp.read().decode())
+
+
+def paypal_cancel_subscription(sub_id):
+    """Stop future billing on a subscription."""
+    token = paypal_token()
+    body = json.dumps({"reason": "Customer cancelled in PricePilot"}).encode()
+    req = urllib.request.Request(
+        PAYPAL_BASE + f"/v1/billing/subscriptions/{sub_id}/cancel", data=body,
+        headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+        method="POST")
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return resp.status in (200, 204)
+
+
 # ----------------------------------------------------------------------------
 # Stripe Checkout (REST API, no SDK)
 # ----------------------------------------------------------------------------
@@ -1052,11 +1076,13 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/me":
             email, user = self._current_user()
             return self._send_json({"loggedIn": bool(user), "email": email,
-                                    "paid": bool(user and user.get("paid")) or (email == BOSS_EMAIL)})
+                                    "paid": bool(user and user.get("paid")) or (email == BOSS_EMAIL),
+                                    "subId": (user or {}).get("subId", "")})
 
         if path == "/api/paypal/config":
             return self._send_json({"configured": bool(PAYPAL_CLIENT_ID and PAYPAL_SECRET),
-                                    "clientId": PAYPAL_CLIENT_ID, "env": PAYPAL_ENV, "price": PLAN_PRICE})
+                                    "clientId": PAYPAL_CLIENT_ID, "env": PAYPAL_ENV, "price": PLAN_PRICE,
+                                    "planId": PAYPAL_PLAN_ID, "recurring": bool(PAYPAL_PLAN_ID)})
 
         # ---- eBay account integration ----
         if path == "/api/ebay/status":
@@ -1115,6 +1141,8 @@ class Handler(BaseHTTPRequestHandler):
 
         # Static files (default to index.html)
         rel = path.lstrip("/") or "index.html"
+        if path == "/success":
+            rel = "success.html"
         if rel.endswith("/"):
             rel += "index.html"
         file_path = os.path.normpath(os.path.join(WEBSITE_DIR, rel))
@@ -1230,6 +1258,39 @@ class Handler(BaseHTTPRequestHandler):
                     user["paid"] = True
                     _save_users()
             return self._send_json({"ok": ok})
+
+        if path == "/api/paypal/subscribe":
+            body = self._read_json()
+            sub_id = (body.get("subscriptionID") or "").strip()
+            if not sub_id:
+                return self._send_json({"ok": False, "error": "Missing subscription id"}, 400)
+            try:
+                sub = paypal_get_subscription(sub_id)
+            except Exception as e:
+                return self._send_json({"ok": False, "error": f"Could not verify: {e}"}, 502)
+            if sub.get("status") in ("ACTIVE", "APPROVED"):
+                email, user = self._current_user()
+                if user:
+                    user["paid"] = True
+                    user["subId"] = sub_id
+                    _save_users()
+                return self._send_json({"ok": True})
+            return self._send_json({"ok": False, "error": f"Subscription not active ({sub.get('status')})"}, 400)
+
+        if path == "/api/paypal/cancel":
+            email, user = self._current_user()
+            if not user:
+                return self._send_json({"ok": False, "error": "Not logged in"}, 401)
+            sub_id = user.get("subId")
+            if sub_id:
+                try:
+                    paypal_cancel_subscription(sub_id)
+                except Exception as e:
+                    print("[paypal] cancel failed:", e)
+            user["paid"] = False
+            user["subId"] = ""
+            _save_users()
+            return self._send_json({"ok": True})
 
         if path == "/api/ebay/reprice":
             body = self._read_json()
