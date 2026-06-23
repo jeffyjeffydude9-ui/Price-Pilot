@@ -1165,6 +1165,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", MIME.get(ext, "application/octet-stream"))
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Strict-Transport-Security", "max-age=31536000")
+        # Always serve fresh HTML/CSS/JS so deploys show up immediately (no stale cache).
+        if ext in (".html", ".css", ".js") or rel == "index.html":
+            self.send_header("Cache-Control", "no-cache, must-revalidate")
         self.end_headers()
         self.wfile.write(data)
 
