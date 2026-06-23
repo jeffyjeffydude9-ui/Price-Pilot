@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://price-pilot-ro70.onrender.com/sitemap.xml

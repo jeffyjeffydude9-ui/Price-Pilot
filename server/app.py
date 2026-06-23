@@ -1008,7 +1008,8 @@ def stripe_create_checkout(plan_key, host_base):
 # ----------------------------------------------------------------------------
 MIME = {".html": "text/html; charset=utf-8", ".css": "text/css", ".js": "text/javascript",
         ".png": "image/png", ".svg": "image/svg+xml", ".ico": "image/x-icon",
-        ".json": "application/json", ".webmanifest": "application/manifest+json"}
+        ".json": "application/json", ".webmanifest": "application/manifest+json",
+        ".txt": "text/plain; charset=utf-8", ".xml": "application/xml; charset=utf-8"}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1024,6 +1025,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Strict-Transport-Security", "max-age=31536000")
         for c in (cookies or []):
             self.send_header("Set-Cookie", c)
         self.end_headers()
@@ -1149,7 +1151,10 @@ class Handler(BaseHTTPRequestHandler):
         if not file_path.startswith(WEBSITE_DIR):
             return self._send_json({"error": "forbidden"}, 403)
         if not os.path.isfile(file_path):
-            file_path = os.path.join(WEBSITE_DIR, "index.html")  # SPA-ish fallback
+            # A real file (has an extension) that's missing → 404, don't serve HTML.
+            if "." in os.path.basename(rel):
+                return self._send_json({"error": "not found"}, 404)
+            file_path = os.path.join(WEBSITE_DIR, "index.html")  # SPA route fallback
         try:
             with open(file_path, "rb") as f:
                 data = f.read()
@@ -1159,6 +1164,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", MIME.get(ext, "application/octet-stream"))
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("Strict-Transport-Security", "max-age=31536000")
         self.end_headers()
         self.wfile.write(data)
 

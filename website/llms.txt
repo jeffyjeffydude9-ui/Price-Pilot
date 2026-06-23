@@ -1,0 +1,12 @@
+# PricePilot
+
+> PricePilot is a pricing tool for online sellers and resellers. Paste any product and it scans live market prices across the web, tells you if your price is too high or too low, shows your true profit after eBay and Amazon FBA fees, and can connect to eBay to reprice your listings automatically.
+
+## Pages
+
+- [Home](https://price-pilot-ro70.onrender.com/): Live price analysis, fee calculator, eBay repricing, and pricing.
+
+## Pricing
+
+- Starter: Free — 2 searches per day.
+- Growth: $29/month — unlimited searches, eBay repricing, profit-after-fees calculator.
