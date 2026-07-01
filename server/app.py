@@ -1301,6 +1301,28 @@ class Handler(BaseHTTPRequestHandler):
             _save_users()
             return self._send_json({"ok": True})
 
+        # PayPal calls this automatically on subscription events. Cuts access
+        # when a customer cancels or a payment fails; restores it when active.
+        if path == "/api/paypal/webhook":
+            body = self._read_json()
+            event = (body.get("event_type") or "").upper()
+            res = body.get("resource") or {}
+            sub_id = res.get("id") or res.get("billing_agreement_id") or ""
+            DOWNGRADE = {"BILLING.SUBSCRIPTION.CANCELLED", "BILLING.SUBSCRIPTION.SUSPENDED",
+                         "BILLING.SUBSCRIPTION.EXPIRED", "BILLING.SUBSCRIPTION.PAYMENT.FAILED",
+                         "PAYMENT.SALE.DENIED"}
+            if sub_id:
+                target = next((u for u in _users.values() if u.get("subId") == sub_id), None)
+                if target:
+                    if event in DOWNGRADE:
+                        target["paid"] = False
+                        _save_users()
+                        print(f"[paypal] access revoked ({event}) for sub {sub_id}")
+                    elif event in ("BILLING.SUBSCRIPTION.ACTIVATED", "PAYMENT.SALE.COMPLETED"):
+                        target["paid"] = True
+                        _save_users()
+            return self._send_json({"ok": True})
+
         if path == "/api/ebay/reprice":
             body = self._read_json()
             item_id = str(body.get("itemId") or "").strip()
