@@ -1071,6 +1071,8 @@ class Handler(BaseHTTPRequestHandler):
                 # auto/ebay still attempt a best-effort scrape even without keys
                 "liveSearch": has_live_key or SEARCH_PROVIDER in ("auto", "ebay"),
                 "ebayAppConfigured": bool(EBAY_CLIENT_ID and EBAY_CLIENT_SECRET and EBAY_RUNAME),
+                "persistent": DATA_DIR != ROOT,   # True only when a Render disk is set via DATA_DIR
+                "accounts": len(_users),
                 "plans": PLANS,
             })
 
