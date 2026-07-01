@@ -537,8 +537,15 @@ $('authForm').addEventListener('submit', async (e) => {
     const res = await (await fetch('/api/' + (authMode === 'login' ? 'login' : 'signup'), {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password })
     })).json();
-    if (!res.ok) { $('authErr').textContent = res.error || 'Failed'; $('authErr').hidden = false; }
-    else {
+    if (!res.ok) {
+      if (authMode === 'signup' && /already exists/i.test(res.error || '')) {
+        authMode = 'login'; updateAuthUI();
+        $('authErr').textContent = 'You already have an account — please log in.';
+      } else {
+        $('authErr').textContent = res.error || 'Failed';
+      }
+      $('authErr').hidden = false;
+    } else {
       ACCOUNT = { loggedIn: true, email: res.email, paid: !!res.paid };
       updateAccountUI(); closeAuth();
       if (res.email === BOSS_EMAIL) {
