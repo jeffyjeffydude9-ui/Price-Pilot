@@ -591,7 +591,7 @@ function renderPayPal() {
     if (!window.paypal) { container.innerHTML = '<p class="modal__note">PayPal failed to load.</p>'; return; }
     const cfg = {
       style: { layout: 'horizontal', height: 42, color: 'gold', tagline: false },
-      onError: () => toast('PayPal error', 'Please try again.', 'error'),
+      onError: (err) => { console.error('PayPal error:', err); toast('PayPal error', (err && err.message ? String(err.message).slice(0, 140) : 'Please try again.'), 'error', 9000); },
     };
     if (recurring) {
       // Real monthly subscription ($29/mo, auto-renews until cancelled)
