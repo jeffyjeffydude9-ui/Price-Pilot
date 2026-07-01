@@ -1310,7 +1310,7 @@ class Handler(BaseHTTPRequestHandler):
             sub_id = res.get("id") or res.get("billing_agreement_id") or ""
             DOWNGRADE = {"BILLING.SUBSCRIPTION.CANCELLED", "BILLING.SUBSCRIPTION.SUSPENDED",
                          "BILLING.SUBSCRIPTION.EXPIRED", "BILLING.SUBSCRIPTION.PAYMENT.FAILED",
-                         "PAYMENT.SALE.DENIED"}
+                         "PAYMENT.SALE.DENIED", "PAYMENT.SALE.REFUNDED", "PAYMENT.SALE.REVERSED"}
             if sub_id:
                 target = next((u for u in _users.values() if u.get("subId") == sub_id), None)
                 if target:
