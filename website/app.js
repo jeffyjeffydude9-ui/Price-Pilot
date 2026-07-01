@@ -595,7 +595,10 @@ function renderPayPal() {
     };
     if (recurring) {
       // Real monthly subscription ($29/mo, auto-renews until cancelled)
-      cfg.createSubscription = (data, actions) => actions.subscription.create({ plan_id: PAYPAL_CFG.planId });
+      cfg.createSubscription = (data, actions) => actions.subscription.create({
+        plan_id: PAYPAL_CFG.planId,
+        application_context: { brand_name: 'PricePilot', shipping_preference: 'NO_SHIPPING', user_action: 'SUBSCRIBE_NOW' },
+      });
       cfg.onApprove = async (data) => {
         const r = await (await fetch('/api/paypal/subscribe', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ subscriptionID: data.subscriptionID })
